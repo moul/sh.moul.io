@@ -31,6 +31,7 @@ Subcommands:
     install_docker      use get.docker.com script to install docker
     install_tools       install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
     adduser             create a new moul user, install SSH keys, configure docker & sudo
+    info                print system info
 
 More info: https://github.com/moul/sh.moul.io
 EOF
@@ -67,6 +68,17 @@ sub_adduser() {
     curl https://github.com/moul.keys >> /home/moul/.ssh/authorized_keys
     chown -R moul:moul /home/moul/.ssh
     echo "moul ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+}
+
+sub_info() {
+    set -x
+    date
+    uptime
+    lsb_release -a
+    cat /proc/cmdline
+    cat /proc/loadavg
+    w | grep -v tmux | head
+    last | grep -v tmux | head
 }
 
 main() {
