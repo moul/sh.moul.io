@@ -28,6 +28,7 @@ Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
 
 Subcommands:
     authorized_keys     add keys from github.com/moul.keys into .ssh/authorized_keys
+    install_docker      use get.docker.com script to install docker
 
 More info: https://github.com/moul/sh.moul.io
 EOF
@@ -40,6 +41,11 @@ sub_authorized_keys() {
     echo "# https://github.com/moul.keys" >> .ssh/authorized_keys
     curl https://github.com/moul.keys >> .ssh/authorized_keys
     echo "" >> .ssh/authorized_keys
+}
+
+sub_install_docker() {
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
 }
 
 main() {
