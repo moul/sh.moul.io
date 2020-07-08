@@ -73,9 +73,11 @@ sub_adduser() {
 
 sub_info() {
     set -x
+    set +e
     date
     uptime
     lsb_release -a
+    cat /etc/debian_version
     cat /proc/cmdline
     cat /proc/loadavg
     w | grep -v tmux | head
