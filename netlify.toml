@@ -1,0 +1,7 @@
+[build]
+    command = "cp index.sh index.html"
+
+[[headers]]
+    for = "/"
+    [headers.values]
+        Content-Type = 'text/plain; charset=utf-8'
