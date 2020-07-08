@@ -24,7 +24,7 @@ if [ "x$TRACE" != "x" ]; then set -x; fi
 
 sub_help() {
     cat <<EOF
-Usage: $(basename $0) <subcommand> [options]
+Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
 
 Subcommands:
     authorized_keys     add keys from github.com/moul.keys into .ssh/authorized_keys
@@ -53,7 +53,7 @@ main() {
             sub_${subcommand} $@
             if [ $? = 127 ]; then
                 echo "Error: '$subcommand' is not a known subcommand." >&2
-                echo "       Run '$(basename $0) --help' for a list of known subcommands." >&2
+                echo "       Run 'curl -s https://sh.moul.io | sh' for a list of known subcommands." >&2
             fi
             ;;
     esac
