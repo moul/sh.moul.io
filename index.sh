@@ -40,15 +40,17 @@ EOF
 
 sub_authorized_keys() {
     # FIXME: support other $USER
+    set -x
     umask 077
     mkdir -p .ssh
     echo "" >> .ssh/authorized_keys
     echo "# https://github.com/moul.keys" >> .ssh/authorized_keys
-    curl https://github.com/moul.keys >> .ssh/authorized_keys
+    curl -s https://github.com/moul.keys >> .ssh/authorized_keys
     echo "" >> .ssh/authorized_keys
 }
 
 sub_install_docker() {
+    set -x
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
     # check if docker-compose is available
@@ -56,17 +58,19 @@ sub_install_docker() {
 
 sub_install_tools() {
     # FIXME: support other distributions
+    set -x
     sudo apt install tmux htop emacs-nox git ssh curl wget mosh
 }
 
 sub_adduser() {
     # FIXME: support other $USER
+    set -x
     useradd -m moul
     usermod -aG docker moul
     usermod --shell=/bin/bash moul
     mkdir -p /home/moul/.ssh
     umask 077
-    curl https://github.com/moul.keys >> /home/moul/.ssh/authorized_keys
+    curl -s https://github.com/moul.keys >> /home/moul/.ssh/authorized_keys
     chown -R moul:moul /home/moul/.ssh
     echo "moul ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 }
@@ -85,6 +89,7 @@ sub_info() {
 }
 
 sub_docker_prune() {
+    set -x
     docker system prune -f
     docker volume prune -f
 }
