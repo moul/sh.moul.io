@@ -32,6 +32,7 @@ Subcommands:
     install_tools       install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
     adduser             create a new moul user, install SSH keys, configure docker & sudo
     info                print system info
+    docker_prune        prune docker things
 
 More info: https://github.com/moul/sh.moul.io
 EOF
@@ -79,6 +80,11 @@ sub_info() {
     cat /proc/loadavg
     w | grep -v tmux | head
     last | grep -v tmux | head
+}
+
+sub_docker_prune() {
+    docker system prune -f
+    docker volume prune -f
 }
 
 main() {

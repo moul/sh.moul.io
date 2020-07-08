@@ -9,11 +9,15 @@ Common commands I run when I arrive on a new server :)
 ```command
 # download and execute the script without argument (display help)
 $> curl -s https://sh.moul.io | sh
-Usage: sh <subcommand> [options]
+Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
 
 Subcommands:
     authorized_keys     add keys from github.com/moul.keys into .ssh/authorized_keys
-    [...]
+    install_docker      use get.docker.com script to install docker
+    install_tools       install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
+    adduser             create a new moul user, install SSH keys, configure docker & sudo
+    info                print system info
+    docker_prune        prune docker things
 
 More info: https://github.com/moul/sh.moul.io
 ```
