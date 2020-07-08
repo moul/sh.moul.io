@@ -27,25 +27,25 @@ sub_help() {
 Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
 
 Subcommands:
-    authorized_keys     add keys from github.com/moul.keys into .ssh/authorized_keys
-    install_docker      use get.docker.com script to install docker
-    install_tools       install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
-    adduser             create a new moul user, install SSH keys, configure docker & sudo
-    info                print system info
-    docker_prune        prune docker things
+    authorized_keys  [USER]   add keys from github.com/moul.keys into .ssh/authorized_keys
+    install_docker            use get.docker.com script to install docker
+    install_tools             install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
+    adduser          [USER]   create a new moul user, install SSH keys, configure docker & sudo
+    info                      print system info
+    docker_prune              prune docker things
 
 More info: https://github.com/moul/sh.moul.io
 EOF
 }
 
 sub_authorized_keys() {
-    # FIXME: support other $USER
+    USER=${1:-${USER}}
     set -x
     umask 077
     mkdir -p .ssh
     echo "" >> .ssh/authorized_keys
-    echo "# https://github.com/moul.keys" >> .ssh/authorized_keys
-    curl -s https://github.com/moul.keys >> .ssh/authorized_keys
+    echo "# https://github.com/${USER}.keys" >> .ssh/authorized_keys
+    curl -s https://github.com/${USER}.keys >> .ssh/authorized_keys
     echo "" >> .ssh/authorized_keys
 }
 
@@ -63,16 +63,16 @@ sub_install_tools() {
 }
 
 sub_adduser() {
-    # FIXME: support other $USER
+    USER=${1:-moul}
     set -x
-    useradd -m moul
-    usermod -aG docker moul
-    usermod --shell=/bin/bash moul
-    mkdir -p /home/moul/.ssh
+    useradd -m ${USER}
+    usermod -aG docker ${USER}
+    usermod --shell=/bin/bash ${USER}
+    mkdir -p /home/${USER}/.ssh
     umask 077
-    curl -s https://github.com/moul.keys >> /home/moul/.ssh/authorized_keys
-    chown -R moul:moul /home/moul/.ssh
-    echo "moul ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+    curl -s https://github.com/${USER}.keys | grep -v "Not Found" >> /home/${USER}/.ssh/authorized_keys
+    chown -R ${USER}:${USER} /home/${USER}/.ssh
+    echo "${USER} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 }
 
 sub_info() {
