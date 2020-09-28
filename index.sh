@@ -59,7 +59,7 @@ sub_install_docker() {
 sub_install_tools() {
     # FIXME: support other distributions
     set -x
-    sudo apt install tmux htop emacs-nox git ssh curl wget mosh
+    sudo apt -y install tmux htop emacs-nox git ssh curl wget mosh
 }
 
 sub_adduser() {
