@@ -27,12 +27,13 @@ sub_help() {
 Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
 
 Subcommands:
-    authorized_keys  [USER]   add keys from github.com/moul.keys into .ssh/authorized_keys
-    install_docker            use get.docker.com script to install docker
-    install_tools             install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
-    adduser          [USER]   create a new moul user, install SSH keys, configure docker & sudo
-    info                      print system info
-    docker_prune              prune docker things
+    authorized_keys  [USER]      add keys from github.com/moul.keys into .ssh/authorized_keys
+    install_docker               use get.docker.com script to install docker
+    install_go       [VERSION]   download go binary and configure path
+    install_tools                install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
+    adduser          [USER]      create a new moul user, install SSH keys, configure docker & sudo
+    info                         print system info
+    docker_prune                 prune docker things
 
 More info: https://github.com/moul/sh.moul.io
 EOF
@@ -60,6 +61,33 @@ sub_install_tools() {
     # FIXME: support other distributions
     set -x
     sudo apt -y install tmux htop emacs-nox git ssh curl wget mosh
+}
+
+sub_install_go() {
+    # FIXME: support other distributions
+    # FIXME: auto-detect last version
+    dest=/usr/local/
+    VERSION=${1:-1.15.3}
+    if [ "$(uname -m)" = "x86_64" ]; then
+	arch="amd64"
+    else
+	arch="386"
+    fi
+    if [ -d "$dest/go" ]; then
+	echo "[-] '$dest' already exists, cannot continue."
+	(
+	    set -x
+	    $dest/go/bin/go version
+	)
+	exit 0
+    fi
+    set -xe
+    curl -sOL https://storage.googleapis.com/golang/go${VERSION}.linux-${arch}.tar.gz
+    tar -C $dest -xf go${VERSION}.linux-${arch}.tar.gz
+    echo 'export GOPATH=$HOME/go' >> ~/.profile
+    echo 'export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin' >> ~/.profile
+    $dest/go/bin/go version
+    rm -f go${VERSION}.linux-${arch}.tar.gz
 }
 
 sub_adduser() {
