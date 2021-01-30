@@ -67,7 +67,7 @@ sub_install_go() {
     # FIXME: support other distributions
     # FIXME: auto-detect last version
     dest=/usr/local/
-    VERSION=${1:-1.15.3}
+    VERSION=${1:-1.15.7}
     if [ "$(uname -m)" = "x86_64" ]; then
 	arch="amd64"
     else
