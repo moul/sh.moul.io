@@ -28,8 +28,11 @@ Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
 
 Subcommands:
     authorized_keys  [USER]      add keys from github.com/moul.keys into .ssh/authorized_keys
+    install_brew                 install homebrew
     install_docker               use get.docker.com script to install docker
     install_go       [VERSION]   download go binary and configure path
+    install_gvm                  install gvm (go version manager)
+    install_hub                  install hub (with homebrew)
     install_tools                install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
     adduser          [USER]      create a new moul user, install SSH keys, configure docker & sudo
     info                         print system info
@@ -63,11 +66,13 @@ sub_install_tools() {
     sudo apt -y install tmux htop emacs-nox git ssh curl wget mosh
 }
 
+GO_VERSION=${GO_VERSION:-1.15.8}
+
 sub_install_go() {
+    GO_VERSION=${1:-${GO_VERSION}}
     # FIXME: support other distributions
     # FIXME: auto-detect last version
     dest=/usr/local/
-    VERSION=${1:-1.15.7}
     if [ "$(uname -m)" = "x86_64" ]; then
 	arch="amd64"
     else
@@ -82,12 +87,12 @@ sub_install_go() {
 	exit 0
     fi
     set -xe
-    curl -sOL https://storage.googleapis.com/golang/go${VERSION}.linux-${arch}.tar.gz
-    tar -C $dest -xf go${VERSION}.linux-${arch}.tar.gz
+    curl -sOL https://storage.googleapis.com/golang/go${GO_VERSION}.linux-${arch}.tar.gz
+    tar -C $dest -xf go${GO_VERSION}.linux-${arch}.tar.gz
     echo 'export GOPATH=$HOME/go' >> ~/.profile
     echo 'export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin' >> ~/.profile
     $dest/go/bin/go version
-    rm -f go${VERSION}.linux-${arch}.tar.gz
+    rm -f go${GO_VERSION}.linux-${arch}.tar.gz
 }
 
 sub_adduser() {
@@ -120,6 +125,34 @@ sub_docker_prune() {
     set -x
     docker system prune -f
     docker volume prune -f
+}
+
+sub_install_brew() {
+    set -xe
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    echo 'eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)' >> /home/moul/.profile
+    . $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+    brew install hello
+}
+
+sub_install_gvm() {
+    set -xe
+    GO_VERSION=${1:-${GO_VERSION}}
+    curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer | bash
+    source $HOME/.gvm/scripts/gvm
+    gvm install go1.4 -B
+    gvm use go1.4
+    GOROOT_BOOTSTRAP=$GOROOT gvm install go${GO_VERSION}
+    gvm use go${GO_VERSION}
+    go get moul.io/moulsay
+    moulsay yo
+}
+
+sub_install_hub() {
+    set -xe
+    sub_install_brew
+    . $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+    brew install hub
 }
 
 main() {
