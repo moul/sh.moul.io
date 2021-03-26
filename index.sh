@@ -140,7 +140,7 @@ sub_install_gvm() {
     set -xe
     GO_VERSION=${1:-${GO_VERSION}}
     curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer | bash
-    source $HOME/.gvm/scripts/gvm
+    . $HOME/.gvm/scripts/gvm
     gvm install go1.4 -B
     gvm use go1.4
     GOROOT_BOOTSTRAP=$GOROOT gvm install go${GO_VERSION}
