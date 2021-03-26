@@ -37,6 +37,7 @@ Subcommands:
     adduser          [USER]      create a new moul user, install SSH keys, configure docker & sudo
     info                         print system info
     docker_prune                 prune docker things
+    disk_placeholder             create a /placeholder file on disk
 
 More info: https://github.com/moul/sh.moul.io
 EOF
@@ -74,17 +75,17 @@ sub_install_go() {
     # FIXME: auto-detect last version
     dest=/usr/local/
     if [ "$(uname -m)" = "x86_64" ]; then
-	arch="amd64"
+  arch="amd64"
     else
-	arch="386"
+  arch="386"
     fi
     if [ -d "$dest/go" ]; then
-	echo "[-] '$dest' already exists, cannot continue."
-	(
-	    set -x
-	    $dest/go/bin/go version
-	)
-	exit 0
+  echo "[-] '$dest' already exists, cannot continue."
+  (
+      set -x
+      $dest/go/bin/go version
+  )
+  exit 0
     fi
     set -xe
     curl -sOL https://storage.googleapis.com/golang/go${GO_VERSION}.linux-${arch}.tar.gz
@@ -153,6 +154,12 @@ sub_install_hub() {
     sub_install_brew
     . $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
     brew install hub
+}
+
+sub_disk_placeholder() {
+    # https://brianschrader.com/archive/why-all-my-servers-have-an-8gb-empty-file/
+    set -xe
+    sudo truncate -s 8G /placeholder
 }
 
 main() {
