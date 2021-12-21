@@ -100,13 +100,13 @@ sub_adduser() {
     USER=${1:-moul}
     set -x
     useradd -m ${USER}
-    usermod -aG docker ${USER}
     usermod --shell=/bin/bash ${USER}
     mkdir -p /home/${USER}/.ssh
     umask 077
     curl -s https://github.com/${USER}.keys | grep -v "Not Found" >> /home/${USER}/.ssh/authorized_keys
     chown -R ${USER}:${USER} /home/${USER}/.ssh
     echo "${USER} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+    usermod -aG docker ${USER} || true
 }
 
 sub_info() {
