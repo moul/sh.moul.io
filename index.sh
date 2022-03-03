@@ -67,7 +67,7 @@ sub_install_tools() {
     sudo apt -y install tmux htop emacs-nox git ssh curl wget mosh
 }
 
-GO_VERSION=${GO_VERSION:-1.15.8}
+GO_VERSION=${GO_VERSION:-1.17.7}
 
 sub_install_go() {
     GO_VERSION=${1:-${GO_VERSION}}
