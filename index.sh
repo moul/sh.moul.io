@@ -180,3 +180,4 @@ main() {
 }
 
 main "$@"
+# Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
