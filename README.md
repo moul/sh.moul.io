@@ -61,7 +61,8 @@ up to a minute after a deploy.
 ## Working on it
 
 ```sh
-make test     # syntax, lint, help parity, a dry run of every subcommand, the build
+make test     # everything that needs no network
+make test-net # the endpoints this points at are still alive
 make run      # what a visitor sees
 make serve    # preview the built site on localhost:8000
 ```
@@ -69,6 +70,36 @@ make serve    # preview the built site on localhost:8000
 Adding a subcommand is two things: a line in the `SUBCOMMANDS` table and a `sub_<name>()`
 function. A test asserts those two agree in both directions, so neither can rot alone.
 Mutating commands go through `run`, or `DRY=1` starts lying.
+
+## What CI checks
+
+A script that other machines pipe into a shell deserves more than a syntax check. Every
+pull request runs:
+
+| | |
+|---|---|
+| **shellcheck**, warnings as errors | plus a style pass that reports and never blocks |
+| **checkbashisms** | these files claim to be POSIX `sh`; this checks the claim |
+| **a danger lint** | no URL piped into a shell, no fixed temp paths, no plain http, no unbounded fetch, no `eval`, no `rm -rf` on a bare variable, plus formatting |
+| **five shells** | `sh`, `dash`, `bash`, `zsh` and busybox `ash`, because `\| sh` resolves to whatever that machine has |
+| **two systems** | Linux and macOS, where bash is 3.2 and the core utilities are BSD |
+| **four distributions** | Alpine, Debian, Fedora and Ubuntu, in containers, as root, the way a fresh server is |
+| **real installs** | `install_tools` actually installs, in a throwaway container, on apt, apk and dnf |
+| **the bootstrap end to end** | run for real with the tailnet off, then the file it wrote is checked |
+| **serving** | build, serve, fetch over http, compare with what was built, and run what came back |
+| **idempotency** | four runs leave one copy of each key, and an existing file survives |
+| **netlify.toml** | plain text, nosniff, and a cache no longer than five minutes |
+| **gitleaks and actionlint** | no secrets, and these workflows are themselves valid |
+| **weekly** | the endpoints this repo sends people to still exist, including a Go build for every architecture |
+
+That matrix is not decoration. Writing it found a bug the previous version had for years:
+`nc -z` does not exist in busybox, so the check for a running ssh server reported "no ssh
+here" on Alpine and every minimal image. It also found that `sudo` was assumed to exist,
+which it does not in a root shell on a fresh server, the oldest use case this repo has.
+
+A formatter was considered and rejected: the ones available expand compact one-line guards
+into four lines each, which makes a file people have to read before running longer without
+making it clearer. The formatting rules that matter are enforced by the danger lint.
 
 ## How it is served
 
