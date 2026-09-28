@@ -1,6 +1,16 @@
 #!/bin/sh
-set -e
-if [ "x$TRACE" != "x" ]; then set -x; fi
+# sh.moul.io: the things I run when I arrive on a new machine.
+#
+#   curl -fsSL https://sh.moul.io | sh                      list the subcommands
+#   curl -fsSL https://sh.moul.io | sh -s -- <sub> [args]   run one
+#   curl -fsSL https://sh.moul.io | DRY=1 sh -s -- <sub>    print what it would do
+#
+# NOT AUDITED. It is a shell script from the internet that installs software: read it first.
+# Source: https://github.com/moul/sh.moul.io
+set -eu
+[ "${TRACE:-}" = "" ] || set -x
+
+VERSION="dev"   # replaced at build time with the commit it was built from
 
 #       ++
 #       ++++
@@ -22,162 +32,253 @@ if [ "x$TRACE" != "x" ]; then set -x; fi
 # /  _ _  _     / \   \ /
 # | / / //_//_//  |   | |
 
+ok()   { printf ' ok  %s\n' "$*"; }
+note() { printf '     %s\n' "$*"; }
+bad()  { printf 'fail %s\n' "$*" >&2; }
+die()  { bad "$*"; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Everything that changes the machine goes through this, so DRY=1 previews the whole thing.
+run() {
+  if [ "${DRY:-0}" = 1 ]; then printf 'dry  %s\n' "$*"; return 0; fi
+  printf ' run %s\n' "$*"
+  "$@"
+}
+
+# Root has no use for sudo, and a container usually has no sudo binary at all. A fresh
+# server where you are already root is the oldest use case this file has.
+SUDO=""
+[ "$(id -u)" = 0 ] || SUDO="sudo"
+
+os()  { case "$(uname -s)" in Darwin) echo macos ;; Linux) echo linux ;; *) echo other ;; esac; }
+arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)  echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;   # the case the old version of this file got wrong
+    armv7l|armv6l) echo armv6l ;;
+    i386|i686)     echo 386 ;;
+    *)             uname -m ;;
+  esac
+}
+pkg() {
+  if have brew; then echo brew
+  elif have apt-get; then echo apt
+  elif have dnf; then echo dnf
+  elif have apk; then echo apk
+  elif have pacman; then echo pacman
+  else echo none; fi
+}
+pkg_install() {
+  case "$(pkg)" in
+    brew)   run brew install "$@" ;;
+    apt)    run $SUDO apt-get update -qq; run $SUDO apt-get install -y "$@" ;;
+    dnf)    run $SUDO dnf install -y "$@" ;;
+    apk)    run $SUDO apk add --no-cache "$@" ;;
+    pacman) run $SUDO pacman -Sy --noconfirm "$@" ;;
+    *)      die "no package manager found: install these by hand: $*" ;;
+  esac
+}
+
+# ── subcommands ───────────────────────────────────────────────────────────────
+# One line each, "name<TAB>args<TAB>description". The help is generated from this, so it
+# cannot drift from what actually exists, and a test checks both directions.
+SUBCOMMANDS='
+agents|[ACCOUNTS...]|set up a machine an agent will drive: keys, remote login, tailnet
+authorized_keys|[ACCOUNTS...]|add github.com/<account>.keys to ~/.ssh/authorized_keys
+install_tools|[PKGS...]|tmux, htop, git, curl, wget, mosh, jq, ripgrep, or what you name
+install_brew|"|the package manager, on macOS or Linux
+install_docker|"|via get.docker.com
+install_go|[VERSION]|the latest Go, or the one you name, with the right architecture
+info|"|what this machine is
+docker_prune|"|reclaim docker disk
+disk_placeholder|[SIZE]|a file to delete when the disk fills up at 3am
+'
+
 sub_help() {
-    cat <<EOF
-Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
+  cat <<EOF
+Usage: curl -fsSL https://sh.moul.io | sh -s -- <subcommand> [options]
 
 Subcommands:
-    authorized_keys  [USER]      add keys from github.com/moul.keys into .ssh/authorized_keys
-    install_brew                 install homebrew
-    install_docker               use get.docker.com script to install docker
-    install_go       [VERSION]   download go binary and configure path
-    install_gvm                  install gvm (go version manager)
-    install_hub                  install hub (with homebrew)
-    install_tools                install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
-    adduser          [USER]      create a new moul user, install SSH keys, configure docker & sudo
-    info                         print system info
-    docker_prune                 prune docker things
-    disk_placeholder             create a /placeholder file on disk
+EOF
+  echo "$SUBCOMMANDS" | grep . | while IFS='|' read -r name args desc; do
+    [ "$args" = '"' ] && args=""
+    printf '    %-18s %-14s %s\n' "$name" "$args" "$desc"
+  done
+  cat <<EOF
 
+Anything mutating honours DRY=1, which prints instead of doing.
+Built from: $VERSION
 More info: https://github.com/moul/sh.moul.io
 EOF
 }
 
-sub_authorized_keys() {
-    USER=${1:-${USER}}
-    set -x
-    umask 077
-    mkdir -p .ssh
-    echo "" >> .ssh/authorized_keys
-    echo "# https://github.com/${USER}.keys" >> .ssh/authorized_keys
-    curl -s https://github.com/${USER}.keys >> .ssh/authorized_keys
-    echo "" >> .ssh/authorized_keys
+# The one that matters: a new machine, authorized and reachable, and nothing else.
+sub_agents() {
+  if [ "${DRY:-0}" = 1 ]; then note "dry  fetch https://sh.moul.io/agents and run it with: $*"; return 0; fi
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 60 https://sh.moul.io/agents -o "$tmp" \
+    || die "could not fetch /agents"
+  sh "$tmp" "$@"
 }
 
-sub_install_docker() {
-    set -x
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sh get-docker.sh
-    # check if docker-compose is available
+sub_authorized_keys() {
+  [ $# -gt 0 ] || set -- moul
+  AK="$HOME/.ssh/authorized_keys"
+  run mkdir -p "$HOME/.ssh"
+  run chmod 700 "$HOME/.ssh"
+  [ "${DRY:-0}" = 1 ] || { touch "$AK"; chmod 600 "$AK"; }
+  for account in "$@"; do
+    keys="$(curl -fsSL --connect-timeout 10 "https://github.com/$account.keys")" \
+      || die "could not read the keys of $account"
+    [ -n "$keys" ] || die "$account has no public keys"
+    echo "$keys" | while IFS= read -r key; do
+      [ -n "$key" ] || continue
+      body="$(echo "$key" | awk '{print $2}')"
+      # By key body, so running this twice does not write the same key twice, which is
+      # what the previous version of this script did every single time.
+      if grep -qsF "$body" "$AK"; then
+        note "already there: $account ...$(echo "$body" | tail -c 9)"
+      elif [ "${DRY:-0}" = 1 ]; then
+        note "dry  authorize $account ...$(echo "$body" | tail -c 9)"
+      else
+        printf '%s # %s, added %s\n' "$key" "$account" "$(date +%F)" >>"$AK"
+        ok "authorized $account ...$(echo "$body" | tail -c 9)"
+      fi
+    done
+  done
 }
 
 sub_install_tools() {
-    # FIXME: support other distributions
-    set -x
-    sudo apt -y install tmux htop emacs-nox git ssh curl wget mosh make
-}
-
-GO_VERSION=${GO_VERSION:-1.17.7}
-
-sub_install_go() {
-    GO_VERSION=${1:-${GO_VERSION}}
-    # FIXME: support other distributions
-    # FIXME: auto-detect last version
-    dest=/usr/local/
-    if [ "$(uname -m)" = "x86_64" ]; then
-  arch="amd64"
-    else
-  arch="386"
-    fi
-    if [ -d "$dest/go" ]; then
-  echo "[-] '$dest' already exists, cannot continue."
-  (
-      set -x
-      $dest/go/bin/go version
-  )
-  exit 0
-    fi
-    set -xe
-    curl -sOL https://storage.googleapis.com/golang/go${GO_VERSION}.linux-${arch}.tar.gz
-    tar -C $dest -xf go${GO_VERSION}.linux-${arch}.tar.gz
-    echo 'export GOPATH=$HOME/go' >> ~/.profile
-    echo 'export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin' >> ~/.profile
-    $dest/go/bin/go version
-    rm -f go${GO_VERSION}.linux-${arch}.tar.gz
-}
-
-sub_adduser() {
-    USER=${1:-moul}
-    set -x
-    useradd -m ${USER}
-    usermod -aG docker ${USER}
-    usermod --shell=/bin/bash ${USER}
-    mkdir -p /home/${USER}/.ssh
-    umask 077
-    curl -s https://github.com/${USER}.keys | grep -v "Not Found" >> /home/${USER}/.ssh/authorized_keys
-    chown -R ${USER}:${USER} /home/${USER}/.ssh
-    echo "${USER} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-}
-
-sub_info() {
-    set -x
-    set +e
-    date
-    uptime
-    lsb_release -a
-    cat /etc/debian_version
-    cat /proc/cmdline
-    cat /proc/loadavg
-    w | grep -v tmux | head
-    last | grep -v tmux | head
-}
-
-sub_docker_prune() {
-    set -x
-    docker system prune -f
-    docker volume prune -f
+  [ $# -gt 0 ] || set -- tmux htop git curl wget mosh jq ripgrep
+  missing=""
+  for p in "$@"; do
+    c="$p"; [ "$p" = ripgrep ] && c=rg
+    have "$c" || missing="$missing $p"
+  done
+  [ -n "$missing" ] || { ok "already installed: $*"; return 0; }
+  # shellcheck disable=SC2086
+  pkg_install $missing
 }
 
 sub_install_brew() {
-    set -xe
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    echo 'eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)' >> /home/moul/.profile
-    . $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
-    brew install hello
+  have brew && { ok "already installed: $(brew --version | head -1)"; return 0; }
+  if [ "${DRY:-0}" = 1 ]; then
+    note "dry  fetch the Homebrew installer and run it, then put it on PATH for login shells"
+    return 0
+  fi
+  # Fetch, then run. The usual one-liner substitutes the download inside the command, so
+  # the script is fetched even when you only meant to look at what would happen.
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 120 \
+    https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$tmp" || die "download failed"
+  /bin/bash "$tmp"
+  # The old version wrote this to one hardcoded home directory, which worked for exactly
+  # one machine. Find the prefix, write to the profile of whoever is running.
+  for prefix in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew; do
+    [ -x "$prefix/bin/brew" ] || continue
+    profile="$HOME/.profile"; [ "$(os)" = macos ] && profile="$HOME/.zprofile"
+    if grep -qs 'brew shellenv' "$profile"; then
+      note "already on PATH for login shells"
+    elif [ "${DRY:-0}" = 1 ]; then
+      note "dry  add the brew environment to $profile"
+    else
+      printf '\neval "$(%s/bin/brew shellenv)"\n' "$prefix" >>"$profile"
+      ok "added to $profile"
+    fi
+    break
+  done
 }
 
-sub_install_gvm() {
-    set -xe
-    GO_VERSION=${1:-${GO_VERSION}}
-    curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer | bash
-    . $HOME/.gvm/scripts/gvm
-    gvm install go1.4 -B
-    gvm use go1.4
-    GOROOT_BOOTSTRAP=$GOROOT gvm install go${GO_VERSION}
-    gvm use go${GO_VERSION}
-    go get moul.io/moulsay
-    moulsay yo
+sub_install_docker() {
+  have docker && { ok "already installed: $(docker --version)"; return 0; }
+  if [ "${DRY:-0}" = 1 ]; then note "dry  fetch get.docker.com and run it"; return 0; fi
+  # A temp file with a predictable name in a shared directory is somebody else's symlink.
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 120 https://get.docker.com -o "$tmp" \
+    || die "download failed"
+  sh "$tmp"
 }
 
-sub_install_hub() {
-    set -xe
-    sub_install_brew
-    . $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
-    brew install hub
+sub_install_go() {
+  version="${1:-}"
+  if [ "${DRY:-0}" = 1 ] && [ -z "$version" ]; then
+    note "dry  resolve the latest version, then install it for $(os)-$(arch) into /usr/local"
+    return 0
+  fi
+  if [ -z "$version" ]; then
+    # The old version pinned a release from 2022. Ask upstream what is current instead.
+    version="$(curl -fsSL --proto '=https' --connect-timeout 10 --max-time 30 \
+      'https://go.dev/VERSION?m=text' | head -1)" || die "could not resolve the latest version"
+  fi
+  case "$version" in go*) ;; *) version="go$version" ;; esac
+  goos="$(os)"; [ "$goos" = macos ] && goos=darwin
+  tarball="$version.$goos-$(arch).tar.gz"
+
+  if have go; then
+    ok "already installed: $(go version)"
+    note "to replace it: rm -rf /usr/local/go, then run this again"
+    return 0
+  fi
+  if [ "${DRY:-0}" = 1 ]; then note "dry  install $tarball into /usr/local"; return 0; fi
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 600 "https://go.dev/dl/$tarball" -o "$tmp/go.tar.gz" \
+    || die "no such build: $tarball"
+  run $SUDO rm -rf /usr/local/go
+  run $SUDO tar -C /usr/local -xf "$tmp/go.tar.gz"
+  profile="$HOME/.profile"; [ "$(os)" = macos ] && profile="$HOME/.zprofile"
+  if ! grep -qs '/usr/local/go/bin' "$profile"; then
+    printf '\nexport PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"\n' >>"$profile"
+    ok "added Go to PATH in $profile"
+  fi
+  ok "$(/usr/local/go/bin/go version)"
+}
+
+sub_info() {
+  printf 'host      %s\n' "$(hostname 2>/dev/null || uname -n)"
+  printf 'os        %s %s (%s)\n' "$(uname -s)" "$(uname -r)" "$(arch)"
+  # shellcheck source=/dev/null  # a file on the machine being described, not in this repo
+  [ -r /etc/os-release ] && printf 'distro    %s\n' "$(. /etc/os-release && echo "$PRETTY_NAME")"
+  [ "$(os)" = macos ] && printf 'macos     %s\n' "$(sw_vers -productVersion 2>/dev/null)"
+  printf 'uptime    %s\n' "$(uptime | sed 's/^ *//')"
+  printf 'disk      %s free\n' "$(df -h / | awk 'NR==2 {print $4}')"
+  printf 'pkg mgr   %s\n' "$(pkg)"
+  for t in git go docker tailscale claude; do
+    have "$t" && printf '%-9s %s\n' "$t" "$(command -v "$t")"
+  done
+  printf 'script    %s\n' "$VERSION"
+}
+
+sub_docker_prune() {
+  # A dry run is a plan, and a plan can be shown for software that is not installed yet.
+  # Only a real run needs the tool to exist.
+  if [ "${DRY:-0}" = 1 ]; then
+    have docker || note "docker is not installed here, so a real run would stop"
+  else
+    have docker || die "no docker here"
+  fi
+  run docker system prune -f
+  run docker volume prune -f
 }
 
 sub_disk_placeholder() {
-    # https://brianschrader.com/archive/why-all-my-servers-have-an-8gb-empty-file/
-    set -xe
-    sudo truncate -s 8G /placeholder
+  # A file you can delete at 3am when the disk is full and nothing will start.
+  # https://brianschrader.com/archive/why-all-my-servers-have-an-8gb-empty-file/
+  size="${1:-8G}"
+  [ -e /placeholder ] && { ok "/placeholder already exists ($(du -h /placeholder | cut -f1))"; return 0; }
+  run $SUDO truncate -s "$size" /placeholder
 }
 
 main() {
-    subcommand=$1
-    case $subcommand in
-        "" | "-h" | "--help")
-            sub_help
-            ;;
-        *)
-            shift
-            sub_${subcommand} $@
-            if [ $? = 127 ]; then
-                echo "Error: '$subcommand' is not a known subcommand." >&2
-                echo "       Run 'curl -s https://sh.moul.io | sh' for a list of known subcommands." >&2
-            fi
-            ;;
-    esac
+  case "${1:-}" in
+    ""|-h|--help|help) sub_help; return 0 ;;
+  esac
+  sub="$1"; shift
+  if ! command -v "sub_$sub" >/dev/null 2>&1; then
+    bad "'$sub' is not a subcommand"
+    note "run: curl -fsSL https://sh.moul.io | sh"
+    return 1
+  fi
+  "sub_$sub" "$@"
 }
 
 main "$@"
-# Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
