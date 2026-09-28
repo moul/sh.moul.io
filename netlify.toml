@@ -1,7 +1,20 @@
 [build]
-    command = "cp index.sh index.html"
+    command = "./bin/build.sh"
+    publish = "public"
+
+# Everything here is meant to be piped into a shell, so it is served as plain text: a
+# browser shows it instead of downloading it, which is the point of reading before running.
+[[headers]]
+    for = "/*"
+    [headers.values]
+        Content-Type = "text/plain; charset=utf-8"
+        X-Content-Type-Options = "nosniff"
+        # Short, because the whole value of these URLs is that a fix reaches the next
+        # machine immediately. A cached installer is an installer you cannot correct.
+        Cache-Control = "public, max-age=60, must-revalidate"
 
 [[headers]]
-    for = "/"
+    for = "/favicon.ico"
     [headers.values]
-        Content-Type = 'text/plain; charset=utf-8'
+        Content-Type = "image/x-icon"
+        Cache-Control = "public, max-age=86400"

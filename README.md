@@ -2,38 +2,80 @@
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/25622023-5703-42ff-9b10-3d7ad75db31a/deploy-status)](https://app.netlify.com/sites/sh-moul-io/deploys)
 
-Common commands I run when I arrive on a new server :)
+The things I run when I arrive on a new machine, served as plain text so I can read them
+before I pipe them into a shell.
 
-## Usage
+## The one that matters
 
-```command
-# download and execute the script without argument (display help)
-$> curl -s https://sh.moul.io | sh
-Usage: curl -s https://sh.moul.io | sh -s -- <subcommand> [options]
-
-Subcommands:
-    authorized_keys     add keys from github.com/moul.keys into .ssh/authorized_keys
-    install_docker      use get.docker.com script to install docker
-    install_tools       install common tools (tmux, htop, git, ssh, curl, wget, mosh, emacs)
-    adduser             create a new moul user, install SSH keys, configure docker & sudo
-    info                print system info
-    docker_prune        prune docker things
-
-More info: https://github.com/moul/sh.moul.io
+```sh
+curl -fsSL https://sh.moul.io/agents | sh
 ```
 
-```command
-# run authorized_keys subcommand
-$> curl -s https://sh.moul.io | sh -s -- authorized_keys
+Run it on a **new machine**, and nothing else. It authorizes my keys, turns on remote login,
+joins the machine to my tailnet, and prints the single `ssh` line that reaches it from
+anywhere. It installs no tooling and touches no account: everything after that is driven
+over ssh from a machine I already use.
+
+```sh
+curl -fsSL https://sh.moul.io/agents | sh -s -- alice bob        # other accounts
+curl -fsSL https://sh.moul.io/agents | TS=0 sh                   # skip the tailnet
+curl -fsSL https://sh.moul.io/agents | AGENT_KEY="ssh-ed25519 AAAA... ctl" sh
 ```
 
-## Alternative usages
+The key endpoints are read **once** and written to disk. They are mutable lists controlled
+by those accounts, so a machine that re-read them would hand a shell to whoever controls an
+account tomorrow. Snapshot, not subscription. They also arrive with their comments stripped,
+so every key is anonymous: taking the list takes all of them.
 
-```command
-# download the script
-curl -s https://sh.moul.io > sh-moul-io.sh
-# execute without argument
-sh sh-moul-io.sh
-# execute with arguments
-sh sh-moul.io.sh authorized_keys
+## Everything else
+
+```sh
+curl -fsSL https://sh.moul.io | sh                        # the list
+curl -fsSL https://sh.moul.io | sh -s -- <sub> [args]     # run one
+curl -fsSL https://sh.moul.io | DRY=1 sh -s -- <sub>      # print what it would do
 ```
+
+| | |
+|---|---|
+| `agents` | the one above |
+| `authorized_keys [ACCOUNTS...]` | add `github.com/<account>.keys`, skipping keys already there |
+| `install_tools [PKGS...]` | tmux, htop, git, curl, wget, mosh, jq, ripgrep, through whichever package manager exists |
+| `install_brew` | the package manager, macOS or Linux |
+| `install_docker` | via get.docker.com |
+| `install_go [VERSION]` | the current release by default, with the right architecture |
+| `info` | what this machine is |
+| `docker_prune` | reclaim docker disk |
+| `disk_placeholder [SIZE]` | a file to delete when the disk fills up at 3am |
+
+**`DRY=1` works everywhere.** Every mutating command goes through one wrapper, so a dry run
+prints the whole plan and changes nothing. Worth doing once on a machine you care about.
+
+## Reading before running
+
+This is a shell script from the internet that installs software. It is served as
+`text/plain` so a browser shows it rather than downloading it, and every published file
+carries the commit it was built from, printed by `info` and at the end of `agents`. If
+something behaves unlike the source, compare that stamp: a CDN can serve an older copy for
+up to a minute after a deploy.
+
+## Working on it
+
+```sh
+make test     # syntax, lint, help parity, a dry run of every subcommand, the build
+make run      # what a visitor sees
+make serve    # preview the built site on localhost:8000
+```
+
+Adding a subcommand is two things: a line in the `SUBCOMMANDS` table and a `sub_<name>()`
+function. A test asserts those two agree in both directions, so neither can rot alone.
+Mutating commands go through `run`, or `DRY=1` starts lying.
+
+## How it is served
+
+Netlify builds `public/` with `bin/build.sh`: each script is stamped with the commit and
+published under both a clean path (`/agents`) and its real name (`/agents.sh`), with
+`/index.html` for the root. Headers set `text/plain`, `nosniff`, and a **60 second** cache,
+because the value of these URLs is that a fix reaches the next machine immediately.
+
+`agents` is the rendered copy of a generic bootstrap kit: the accounts are filled in here,
+the logic is maintained upstream.
