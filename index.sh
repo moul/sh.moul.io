@@ -45,6 +45,11 @@ run() {
   "$@"
 }
 
+# Root has no use for sudo, and a container usually has no sudo binary at all. A fresh
+# server where you are already root is the oldest use case this file has.
+SUDO=""
+[ "$(id -u)" = 0 ] || SUDO="sudo"
+
 os()  { case "$(uname -s)" in Darwin) echo macos ;; Linux) echo linux ;; *) echo other ;; esac; }
 arch() {
   case "$(uname -m)" in
@@ -66,10 +71,10 @@ pkg() {
 pkg_install() {
   case "$(pkg)" in
     brew)   run brew install "$@" ;;
-    apt)    run sudo apt-get update -qq; run sudo apt-get install -y "$@" ;;
-    dnf)    run sudo dnf install -y "$@" ;;
-    apk)    run sudo apk add --no-cache "$@" ;;
-    pacman) run sudo pacman -Sy --noconfirm "$@" ;;
+    apt)    run $SUDO apt-get update -qq; run $SUDO apt-get install -y "$@" ;;
+    dnf)    run $SUDO dnf install -y "$@" ;;
+    apk)    run $SUDO apk add --no-cache "$@" ;;
+    pacman) run $SUDO pacman -Sy --noconfirm "$@" ;;
     *)      die "no package manager found: install these by hand: $*" ;;
   esac
 }
@@ -111,7 +116,8 @@ EOF
 sub_agents() {
   if [ "${DRY:-0}" = 1 ]; then note "dry  fetch https://sh.moul.io/agents and run it with: $*"; return 0; fi
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-  curl -fsSL --proto '=https' https://sh.moul.io/agents -o "$tmp" || die "could not fetch /agents"
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 60 https://sh.moul.io/agents -o "$tmp" \
+    || die "could not fetch /agents"
   sh "$tmp" "$@"
 }
 
@@ -163,8 +169,8 @@ sub_install_brew() {
   # Fetch, then run. The usual one-liner substitutes the download inside the command, so
   # the script is fetched even when you only meant to look at what would happen.
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-  curl -fsSL --proto '=https' https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$tmp" \
-    || die "download failed"
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 120 \
+    https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$tmp" || die "download failed"
   /bin/bash "$tmp"
   # The old version wrote this to one hardcoded home directory, which worked for exactly
   # one machine. Find the prefix, write to the profile of whoever is running.
@@ -188,7 +194,8 @@ sub_install_docker() {
   if [ "${DRY:-0}" = 1 ]; then note "dry  fetch get.docker.com and run it"; return 0; fi
   # A temp file with a predictable name in a shared directory is somebody else's symlink.
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-  curl -fsSL --proto '=https' https://get.docker.com -o "$tmp" || die "download failed"
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 120 https://get.docker.com -o "$tmp" \
+    || die "download failed"
   sh "$tmp"
 }
 
@@ -200,7 +207,8 @@ sub_install_go() {
   fi
   if [ -z "$version" ]; then
     # The old version pinned a release from 2022. Ask upstream what is current instead.
-    version="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)" || die "could not resolve the latest version"
+    version="$(curl -fsSL --proto '=https' --connect-timeout 10 --max-time 30 \
+      'https://go.dev/VERSION?m=text' | head -1)" || die "could not resolve the latest version"
   fi
   case "$version" in go*) ;; *) version="go$version" ;; esac
   goos="$(os)"; [ "$goos" = macos ] && goos=darwin
@@ -213,10 +221,10 @@ sub_install_go() {
   fi
   if [ "${DRY:-0}" = 1 ]; then note "dry  install $tarball into /usr/local"; return 0; fi
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-  curl -fsSL --proto '=https' "https://go.dev/dl/$tarball" -o "$tmp/go.tar.gz" \
+  curl -fsSL --proto '=https' --connect-timeout 10 --max-time 600 "https://go.dev/dl/$tarball" -o "$tmp/go.tar.gz" \
     || die "no such build: $tarball"
-  run sudo rm -rf /usr/local/go
-  run sudo tar -C /usr/local -xf "$tmp/go.tar.gz"
+  run $SUDO rm -rf /usr/local/go
+  run $SUDO tar -C /usr/local -xf "$tmp/go.tar.gz"
   profile="$HOME/.profile"; [ "$(os)" = macos ] && profile="$HOME/.zprofile"
   if ! grep -qs '/usr/local/go/bin' "$profile"; then
     printf '\nexport PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"\n' >>"$profile"
@@ -228,6 +236,7 @@ sub_install_go() {
 sub_info() {
   printf 'host      %s\n' "$(hostname 2>/dev/null || uname -n)"
   printf 'os        %s %s (%s)\n' "$(uname -s)" "$(uname -r)" "$(arch)"
+  # shellcheck source=/dev/null  # a file on the machine being described, not in this repo
   [ -r /etc/os-release ] && printf 'distro    %s\n' "$(. /etc/os-release && echo "$PRETTY_NAME")"
   [ "$(os)" = macos ] && printf 'macos     %s\n' "$(sw_vers -productVersion 2>/dev/null)"
   printf 'uptime    %s\n' "$(uptime | sed 's/^ *//')"
@@ -240,7 +249,13 @@ sub_info() {
 }
 
 sub_docker_prune() {
-  have docker || die "no docker here"
+  # A dry run is a plan, and a plan can be shown for software that is not installed yet.
+  # Only a real run needs the tool to exist.
+  if [ "${DRY:-0}" = 1 ]; then
+    have docker || note "docker is not installed here, so a real run would stop"
+  else
+    have docker || die "no docker here"
+  fi
   run docker system prune -f
   run docker volume prune -f
 }
@@ -250,7 +265,7 @@ sub_disk_placeholder() {
   # https://brianschrader.com/archive/why-all-my-servers-have-an-8gb-empty-file/
   size="${1:-8G}"
   [ -e /placeholder ] && { ok "/placeholder already exists ($(du -h /placeholder | cut -f1))"; return 0; }
-  run sudo truncate -s "$size" /placeholder
+  run $SUDO truncate -s "$size" /placeholder
 }
 
 main() {

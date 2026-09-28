@@ -1,12 +1,183 @@
+# The gate for a repo whose whole job is to be piped into a shell on machines that matter.
+#
+# The rule it enforces: a change is safe when it survives every shell a `| sh` can resolve
+# to, on every system this is aimed at, and when what the URL serves still runs after being
+# built and fetched. Anything less is testing the copy in git rather than the copy people
+# receive.
 name: ci
+
 on:
   push:
     branches: [master]
   pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # weekly: the endpoints this points at rot on their own schedule
+  workflow_dispatch:
+
+permissions:
+  contents: read # nothing here writes anything, and the token should not be able to
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: lint and static analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
-      - run: make test
+
+      - name: shellcheck, warnings are errors
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          shellcheck -s sh -S warning index.sh agents.sh bin/*.sh tests/*.sh
+
+      # Style level is opinion, not correctness: shown on every run, never blocking.
+      - name: shellcheck, style level
+        continue-on-error: true
+        run: shellcheck -s sh -S style index.sh agents.sh bin/*.sh tests/*.sh
+
+      # The served scripts claim to be POSIX sh. This is the tool that checks the claim
+      # against Debian's list of things that only bash happens to support.
+      - name: checkbashisms
+        run: |
+          sudo apt-get install -y devscripts
+          checkbashisms -f index.sh agents.sh bin/*.sh tests/*.sh
+
+      - name: the repo's own danger lint
+        run: tests/lint-danger.sh
+
+      - name: actionlint, on these workflows
+        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest -color
+
+      - name: netlify.toml says what it must
+        run: |
+          python3 - <<'PY'
+          import tomllib, sys
+          cfg = tomllib.load(open("netlify.toml", "rb"))
+          assert cfg["build"]["publish"] == "public", "the build must publish public/"
+          assert cfg["build"]["command"].endswith("build.sh"), "the build must run bin/build.sh"
+          headers = {h["for"]: h["values"] for h in cfg["headers"]}
+          root = headers["/*"]
+          assert root["Content-Type"].startswith("text/plain"), "scripts must be served as plain text"
+          assert root["X-Content-Type-Options"] == "nosniff"
+          age = int(root["Cache-Control"].split("max-age=")[1].split(",")[0])
+          assert age <= 300, f"cache of {age}s is too long: a fix must reach the next machine"
+          print("netlify.toml: ok")
+          PY
+
+      - name: no secrets, ever
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source=/repo --no-banner --redact --exit-code 1
+
+  unit:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest] # macOS matters most: it ships bash 3.2 and BSD tools
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/lint-danger.sh
+      - run: tests/test.sh
+      - run: tests/test-shells.sh
+      - run: tests/test-idempotency.sh
+      - run: tests/test-serve.sh
+
+  distros:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each one has a different /bin/sh, a different package manager and a different
+          # set of core utilities. Alpine is busybox, which is where GNU assumptions die.
+          - { image: "alpine:3.20", prep: "apk add --no-cache bash dash zsh grep coreutils findutils curl" }
+          - { image: "debian:12", prep: "apt-get update -qq && apt-get install -y dash bash zsh curl" }
+          - { image: "fedora:40", prep: "dnf install -y dash bash zsh curl findutils" }
+          - { image: "ubuntu:24.04", prep: "apt-get update -qq && apt-get install -y dash bash zsh curl" }
+    steps:
+      - uses: actions/checkout@v4
+      # Mounted read only and copied inside: a container running as root must not be able
+      # to leave root-owned files in the workspace for the next step to trip over.
+      - name: run the suite as root, the way a fresh server is
+        run: |
+          docker run --rm -v "$PWD:/src:ro" ${{ matrix.image }} sh -c '
+            set -e
+            ${{ matrix.prep }} >/dev/null
+            cp -a /src /w && cd /w
+            tests/lint-danger.sh
+            tests/test.sh
+            tests/test-shells.sh
+            tests/test-idempotency.sh
+          '
+
+  real-install:
+    name: really install things on ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "alpine:3.20", "fedora:40"]
+    steps:
+      - uses: actions/checkout@v4
+      # Dry runs prove the plan. This proves the plan works: a throwaway container, real
+      # package manager, real network, and the binaries have to exist afterwards.
+      - name: install_tools for real, then check it worked
+        run: |
+          docker run --rm -v "$PWD:/src:ro" ${{ matrix.image }} sh -c '
+            set -e
+            cp -a /src /w && cd /w
+            sh index.sh install_tools tmux htop jq
+            command -v tmux
+            command -v htop
+            command -v jq
+            sh index.sh info
+          '
+      - name: the bootstrap itself, end to end, with the tailnet off
+        run: |
+          docker run --rm -v "$PWD:/src:ro" ${{ matrix.image }} sh -c '
+            set -e
+            cp -a /src /w && cd /w
+            # A container has no ssh server and no way to start one, so the bootstrap
+            # correctly reports that this machine cannot be reached yet. What must still
+            # be true is everything else it did.
+            TS=0 ACCOUNTS="" AGENT_KEY="ssh-ed25519 AAAACONTAINERTEST ci@container" sh agents.sh || true
+            grep -q AAAACONTAINERTEST "$HOME/.ssh/authorized_keys"
+            test "$(stat -c %a "$HOME/.ssh/authorized_keys")" = 600
+          '
+
+  network:
+    name: the endpoints still exist
+    # Not a gate on every change: it depends on other people's servers. It runs on merges,
+    # on a weekly schedule, and on demand, which is how rot gets caught without flaking.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/test-network.sh
+
+  all-green:
+    name: all green
+    if: always()
+    needs: [lint, unit, distros, real-install]
+    runs-on: ubuntu-latest
+    steps:
+      - name: fail if anything above did not pass
+        run: |
+          echo '${{ toJSON(needs) }}'
+          if echo '${{ toJSON(needs) }}' | grep -qE '"result": *"(failure|cancelled)"'; then
+            echo "something failed" >&2
+            exit 1
+          fi
+          echo "all green"

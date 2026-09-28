@@ -27,7 +27,9 @@ set -u
 
 VERSION="dev"   # replaced at build time with the commit it was built from
 
-ACCOUNTS="${ACCOUNTS:-moul gnoute42}"
+# Unset means the defaults. Explicitly empty means none, which is how you ask for a
+# machine that trusts only the key you pass by hand.
+ACCOUNTS="${ACCOUNTS-moul gnoute42}"
 TS="${TS:-auto}"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
 TS_ARGS="${TS_ARGS:-}"
@@ -41,6 +43,10 @@ for a in $ACCOUNTS; do
     *)         KEYS_URLS="$KEYS_URLS https://github.com/$a.keys" ;;
   esac
 done
+
+# Root has no use for sudo, and a container usually has no sudo binary at all.
+SUDO=""
+[ "$(id -u)" = 0 ] || SUDO="sudo"
 
 ok()   { printf ' ok  %s\n' "$*"; }
 note() { printf '     %s\n' "$*"; }
@@ -85,27 +91,38 @@ done
 ok "$added key(s) added, $(grep -c . "$AK") authorized in total"
 
 # ── 2. remote login ───────────────────────────────────────────────────────────
+# The whole point is to reach this machine later, so failing to turn this on is a failure
+# of the script, not a note in passing. Everything still runs, and the exit code says so.
+RC=0
 sshd_up() {
+  # macOS answers authoritatively.
   have systemsetup && systemsetup -getremotelogin 2>/dev/null | grep -qi 'on$' && return 0
-  have nc && nc -z 127.0.0.1 22 >/dev/null 2>&1 && return 0
+  # On Linux, ask the kernel what is listening rather than trying to connect.
+  have ss && ss -ltn 2>/dev/null | grep -qE '[:.]22[[:space:]]' && return 0
+  have netstat && netstat -ltn 2>/dev/null | grep -qE '[:.]22[[:space:]]' && return 0
+  # Last resort, open a connection. Not `nc -z`: busybox nc has no such flag, so that
+  # check reports "no ssh here" on every busybox system, which is most minimal images.
+  have nc && nc -w 2 127.0.0.1 22 </dev/null >/dev/null 2>&1 && return 0
   return 1
 }
 
 if sshd_up; then
   ok "remote login already on"
 elif [ "$(uname -s)" = Darwin ]; then
-  sudo systemsetup -f -setremotelogin on >/dev/null 2>&1
+  $SUDO systemsetup -f -setremotelogin on >/dev/null 2>&1
   if sshd_up; then ok "remote login enabled"; else
     # On recent macOS this needs Full Disk Access for the terminal it runs in, which a
     # script cannot grant itself. The switch in the settings app always works.
     bad "could not enable it from here"
     note "turn it on: System Settings, General, Sharing, Remote Login. Then run this again"
+    RC=1
   fi
 elif have systemctl; then
-  sudo systemctl enable --now ssh >/dev/null 2>&1 || sudo systemctl enable --now sshd >/dev/null 2>&1
-  sshd_up && ok "remote login enabled" || bad "enable the ssh service by hand"
+  $SUDO systemctl enable --now ssh >/dev/null 2>&1 || $SUDO systemctl enable --now sshd >/dev/null 2>&1
+  if sshd_up; then ok "remote login enabled"; else bad "enable the ssh service by hand"; RC=1; fi
 else
-  bad "enable the ssh server by hand, then run this again"
+  bad "no ssh server here, and no way to start one: enable it by hand"
+  RC=1
 fi
 
 # ── 3. the tailnet ────────────────────────────────────────────────────────────
@@ -121,18 +138,22 @@ elif ts_joined; then
 else
   if ! have tailscale; then
     if have brew; then
-      brew install tailscale >/dev/null 2>&1 && sudo tailscaled install-system-daemon >/dev/null 2>&1
+      brew install tailscale >/dev/null 2>&1 && $SUDO tailscaled install-system-daemon >/dev/null 2>&1
     elif [ "$(uname -s)" = Linux ]; then
-      curl -fsSL https://tailscale.com/install.sh | sh
+      ts_tmp="$(mktemp)"
+      if curl -fsSL --proto '=https' --max-time 60 https://tailscale.com/install.sh -o "$ts_tmp"; then
+        sh "$ts_tmp"
+      fi
+      rm -f "$ts_tmp"
     fi
   fi
   if have tailscale; then
     note "a browser page will open, or a URL will be printed: approve this machine there"
     # shellcheck disable=SC2086
     if [ -n "$TS_AUTHKEY" ]; then
-      sudo tailscale up --authkey "$TS_AUTHKEY" $TS_ARGS
+      $SUDO tailscale up --authkey "$TS_AUTHKEY" $TS_ARGS
     else
-      sudo tailscale up $TS_ARGS
+      $SUDO tailscale up $TS_ARGS
     fi
     ts_joined && ok "tailnet: joined" || bad "tailnet: join did not complete"
   elif [ "$TS" = 1 ]; then
@@ -171,3 +192,6 @@ fi
 echo
 note "nothing else needs typing here"
 note "(this script was built from $VERSION)"
+
+# Non-zero when this machine cannot actually be reached yet, so anything driving it knows.
+exit "$RC"
