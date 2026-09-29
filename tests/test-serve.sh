@@ -50,7 +50,7 @@ mkdir -p "$SANDBOX/home/bin"
 printf '#!/bin/sh\necho "REFUSED sudo" >&2\nexit 7\n' >"$SANDBOX/home/bin/sudo"
 chmod +x "$SANDBOX/home/bin/sudo"
 rc=0
-out="$(HOME="$SANDBOX/home" PATH="$SANDBOX/home/bin:$PATH" TS=0 ACCOUNTS="" \
+out="$(HOME="$SANDBOX/home" PATH="$SANDBOX/home/bin:$PATH" TS=0 TERMINFO=0 ACCOUNTS="" \
        AGENT_KEY="ssh-ed25519 AAAASERVEDRUN served@test" sh "$SANDBOX/agents" 2>&1)" || rc=$?
 case "$rc" in
   0|1) ;;  # 1 is "this machine cannot be reached over ssh yet", which a sandbox is

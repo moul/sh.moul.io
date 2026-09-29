@@ -171,7 +171,21 @@ sub_install_brew() {
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
   curl -fsSL --proto '=https' --connect-timeout 10 --max-time 120 \
     https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$tmp" || die "download failed"
-  /bin/bash "$tmp"
+  # Homebrew needs a terminal to ask for the sudo password. Piped from a URL, stdin IS this
+  # script, so Homebrew sees no tty, puts itself in non-interactive mode, and that mode wants
+  # passwordless sudo. What surfaces is "Insufficient permissions to install Homebrew to
+  # /opt/homebrew", which reads like an ownership problem and sends you to the wrong place.
+  # Hand it the real terminal. The session has one even when this script's stdin does not.
+  if (: </dev/tty) 2>/dev/null; then
+    /bin/bash "$tmp" </dev/tty
+  elif sudo -n true 2>/dev/null; then
+    /bin/bash "$tmp"
+  else
+    bad "no terminal here, and Homebrew needs one to ask for your password"
+    note "run it at a prompt on this machine, then re-run this: see the Homebrew home page"
+    note "or drive this over ssh -t, which gives the session a terminal"
+    return 1
+  fi
   # The old version wrote this to one hardcoded home directory, which worked for exactly
   # one machine. Find the prefix, write to the profile of whoever is running.
   for prefix in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew; do

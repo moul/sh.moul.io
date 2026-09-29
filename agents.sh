@@ -16,6 +16,7 @@
 #   curl ... | sh -s -- alice bob         authorize other accounts instead
 #   curl ... | AGENT_KEY="ssh-ed25519 AAAA... ctl" sh    also authorize a controller's key
 #   curl ... | TS=0 sh                    skip the tailnet
+#   curl ... | TERMINFO=0 sh               skip the terminal database step
 #   curl ... | TS_AUTHKEY="tskey-..." sh  join unattended, no browser
 #   curl ... | TS_ARGS="--ssh" sh         let the tailnet authorize ssh instead of the keyfile
 #
@@ -31,6 +32,9 @@ VERSION="dev"   # replaced at build time with the commit it was built from
 # machine that trusts only the key you pass by hand.
 ACCOUNTS="${ACCOUNTS-moul gnoute42}"
 TS="${TS:-auto}"
+TERMINFO="${TERMINFO:-auto}"
+TERMINFO_TERMS="${TERMINFO_TERMS:-xterm-kitty xterm-ghostty}"
+TERMINFO_PKGS="${TERMINFO_PKGS:-kitty-terminfo ncurses-term}"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
 TS_ARGS="${TS_ARGS:-}"
 AGENT_KEY="${AGENT_KEY:-}"
@@ -125,7 +129,51 @@ else
   RC=1
 fi
 
-# ── 3. the tailnet ────────────────────────────────────────────────────────────
+# ── 3. the terminal database ──────────────────────────────────────────────────
+# tmux, and everything else built on curses, refuses to start when TERM names a terminal the
+# machine has never heard of: "missing or unsuitable terminal: xterm-kitty". TERM arrives
+# from the CLIENT over ssh, so a kitty or ghostty user reaches a brand new machine and the
+# first thing they type is the thing that breaks. The package manager carries these entries.
+#
+# This cannot be complete from here and is not meant to be: only the client has the terminfo
+# for a terminal this machine's distribution does not package, or for any terminal at all on
+# macOS. So when an entry is still missing, print the command that copies it from there.
+# Never fake the entry by aliasing it to xterm-256color: that silently drops the graphics
+# protocol and styled underlines, and nobody ever connects the loss back to this script.
+term_missing() {
+  m=""
+  for t in $TERMINFO_TERMS; do
+    infocmp "$t" >/dev/null 2>&1 || m="$m $t"
+  done
+  printf '%s' "$m"
+}
+
+if [ "$TERMINFO" = 0 ]; then
+  note "terminal database: skipped"
+else
+  missing="$(term_missing)"
+  if [ -n "$missing" ]; then
+    # shellcheck disable=SC2086
+    if have apt-get; then $SUDO apt-get install -y $TERMINFO_PKGS >/dev/null 2>&1
+    elif have dnf; then $SUDO dnf install -y $TERMINFO_PKGS >/dev/null 2>&1
+    elif have pacman; then $SUDO pacman -Sy --noconfirm $TERMINFO_PKGS >/dev/null 2>&1
+    elif have apk; then $SUDO apk add --no-cache $TERMINFO_PKGS >/dev/null 2>&1
+    fi
+    missing="$(term_missing)"
+  fi
+  if [ -z "$missing" ]; then
+    ok "terminal database knows:$TERMINFO_TERMS"
+  else
+    note "terminal database does not know:$missing"
+    note 'tmux over ssh will refuse with "missing or unsuitable terminal"'
+    note "fix from the machine you ssh FROM, no root needed on either side:"
+    for t in $missing; do
+      note "  infocmp -a $t | ssh $(id -un)@<this host> 'mkdir -p ~/.terminfo && tic -x -o ~/.terminfo /dev/stdin'"
+    done
+  fi
+fi
+
+# ── 4. the tailnet ────────────────────────────────────────────────────────────
 # Without it the machine is reachable only from the network it was unboxed on, which is
 # exactly what fails the first time it is set up somewhere else.
 TS_NAME=""; TS_IP=""
@@ -171,7 +219,7 @@ if ts_joined; then
   TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
 fi
 
-# ── 4. how to get in ──────────────────────────────────────────────────────────
+# ── 5. how to get in ──────────────────────────────────────────────────────────
 echo
 ok "done. From here on this machine is driven from somewhere else:"
 echo
