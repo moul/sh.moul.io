@@ -23,7 +23,10 @@ AK="$SANDBOX/.ssh/authorized_keys"
 
 # Non-zero here means "this machine cannot be reached over ssh yet", which is true inside
 # a container and irrelevant to what this test is about: the file it writes.
-run_once() { HOME="$SANDBOX" PATH="$SANDBOX/bin:$PATH" TS=0 ACCOUNTS="" AGENT_KEY="$1" sh agents.sh || true; }
+run_once() {
+  HOME="$SANDBOX" PATH="$SANDBOX/bin:$PATH" TS=0 TERMINFO=0 ACCOUNTS="" \
+    AGENT_KEY="$1" sh agents.sh || true
+}
 
 run_once "$K1" >/dev/null
 run_once "$K1" >/dev/null

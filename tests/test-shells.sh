@@ -51,7 +51,7 @@ for s in $SHELLS; do
   # It exits non-zero when the machine cannot be reached over ssh yet, which is true in a
   # container and false on a real host, so that one reason is allowed and no other.
   rc=0
-  out="$(HOME="$SANDBOX" PATH="$SANDBOX/bin:$PATH" TS=0 ACCOUNTS="" \
+  out="$(HOME="$SANDBOX" PATH="$SANDBOX/bin:$PATH" TS=0 TERMINFO=0 ACCOUNTS="" \
          AGENT_KEY="ssh-ed25519 AAAASHELLTEST test@shells" runner "$s" agents.sh 2>&1)" || rc=$?
   case "$rc" in
     0) ;;
@@ -62,6 +62,12 @@ for s in $SHELLS; do
     *) bad "$s: agents.sh exited $rc"; printf '%s\n' "$out" | head -5 >&2; sub_fail=1 ;;
   esac
   case "$out" in *"1 key(s) added"*) ;; *) bad "$s: agents.sh did not authorize the key"; sub_fail=1 ;; esac
+  # TERMINFO=0 above is not a nicety: without it this suite installs packages in the CI
+  # containers, and a test that installs software on the machine running it is a bug.
+  case "$out" in
+    *"terminal database: skipped"*) ;;
+    *) bad "$s: agents.sh ignored TERMINFO=0"; sub_fail=1 ;;
+  esac
 
   [ "$sub_fail" = 0 ] && ok "$s: help, $(echo "$SUBS" | grep -c .) dry runs, and the bootstrap"
   rm -rf "$SANDBOX"
