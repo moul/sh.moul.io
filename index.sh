@@ -68,6 +68,27 @@ pkg() {
   elif have pacman; then echo pacman
   else echo none; fi
 }
+# Can the privileged path work at all, right now, without a human? Three ways yes:
+# already root, passwordless sudo, or a terminal a person can type a password on. Asking
+# this BEFORE reaching for the package manager is the difference between a useful fallback
+# and a wall of sudo errors.
+can_sudo() {
+  [ "$(id -u)" = 0 ] && return 0
+  have sudo || return 1
+  sudo -n true 2>/dev/null && return 0
+  (: </dev/tty) 2>/dev/null && return 0
+  return 1
+}
+
+# Debian names the package, not always the binary.
+binname() {
+  case "$1" in
+    ripgrep) echo rg ;;
+    fd-find) echo fdfind ;;
+    *)       echo "$1" ;;
+  esac
+}
+
 pkg_install() {
   case "$(pkg)" in
     brew)   run brew install "$@" ;;
@@ -152,16 +173,126 @@ sub_install_tools() {
   [ $# -gt 0 ] || set -- tmux htop git curl wget mosh jq ripgrep
   missing=""
   for p in "$@"; do
-    c="$p"; [ "$p" = ripgrep ] && c=rg
-    have "$c" || missing="$missing $p"
+    have "$(binname "$p")" || missing="$missing $p"
   done
   [ -n "$missing" ] || { ok "already installed: $*"; return 0; }
+
+  if can_sudo; then
+    # shellcheck disable=SC2086
+    pkg_install $missing
+    return $?
+  fi
+
+  # The common case for this file is a machine being set up by something that is not at its
+  # keyboard, so there is no password and no terminal to type one on. Failing here means the
+  # host sits toolless until a human is free. Most of these do not actually need root.
+  note "no root and no terminal to ask for a password: using a user prefix instead"
   # shellcheck disable=SC2086
-  pkg_install $missing
+  install_unprivileged $missing
+}
+
+# ── the unprivileged route ────────────────────────────────────────────────────
+# Only `apt-get install` needs root: it writes outside $HOME and owns the package database.
+# `apt-get download` and `dpkg-deb -x` need nothing, so a package whose dependencies are
+# already satisfied can be unpacked under ~/.local and symlinked onto PATH.
+#
+# It does NOT resolve dependencies, deliberately. Unpacking a dependency tree into a user
+# prefix by hand gives you a binary that loads the wrong libc at the worst possible moment,
+# so an unmet dependency is reported and skipped rather than worked around.
+install_unprivileged() {
+  rc=0
+  for p in "$@"; do
+    b="$(binname "$p")"
+    case "$(os)" in
+      linux)  deb_unpack "$p" "$b" || rc=1 ;;
+      macos)  user_brew "$p" || rc=1 ;;
+      *)      bad "$p: no unprivileged route on this platform"; rc=1 ;;
+    esac
+  done
+  note "still needs a human: anything installing a system service, and privileged prefixes"
+  return "$rc"
+}
+
+deb_unpack() {
+  p="$1"; b="$2"
+  have apt-get && have dpkg-deb || { bad "$p: needs apt-get and dpkg-deb"; return 1; }
+  prefix="$HOME/.local/opt/deb"; bindir="$HOME/.local/bin"
+  if [ "${DRY:-0}" = 1 ]; then
+    note "dry  apt-get download $p, then dpkg-deb -x into $prefix, then link $bindir/$b"
+    return 0
+  fi
+  d="$(mktemp -d)" || return 1
+  out="$( ( set -e
+    cd "$d"
+    apt-get download "$p" >/dev/null 2>&1
+    deb="$(ls ./*.deb 2>/dev/null | head -1)"
+    [ -n "$deb" ]
+    missing=""
+    for dep in $(dpkg-deb -f "$deb" Depends 2>/dev/null | tr ',' '\n' | awk '{print $1}'); do
+      dpkg -s "$dep" >/dev/null 2>&1 || missing="$missing $dep"
+    done
+    [ -z "$missing" ] || { echo "unmet:$missing"; exit 2; }
+    mkdir -p "$prefix" "$bindir"
+    dpkg-deb -x "$deb" "$prefix"
+    found="$(find "$prefix" -type f -perm -u+x -name "$b" | head -1)"
+    [ -n "$found" ]
+    ln -sf "$found" "$bindir/$b"
+    # Verify through the link. A link into a temp dir that is about to be deleted resolves
+    # to nothing, and the first version of this reported success anyway.
+    [ -x "$bindir/$b" ]
+  ) 2>&1 )"
+  r=$?
+  rm -rf "$d"
+  case "$r" in
+    0) ok "$p, unpacked into $prefix and linked as $bindir/$b" ;;
+    2) bad "$p needs root: missing${out#unmet:}" ;;
+    *) bad "$p: could not unpack"; [ -n "$out" ] && note "$out" ;;
+  esac
+  [ "$r" = 0 ]
+}
+
+user_brew() {
+  p="$1"
+  # DRY has to describe the whole plan, including the bootstrap, and must never fail. The
+  # first version checked for the prefix before checking DRY, so `DRY=1 install_tools` on a
+  # Mac without a user prefix reported four failures and exited 1. A preview that fails is
+  # worse than no preview: it is indistinguishable from the real thing being broken.
+  if [ "${DRY:-0}" = 1 ]; then
+    # Once per run, not once per package: the bootstrap happens a single time.
+    if [ ! -x "$HOME/homebrew/bin/brew" ] && [ -z "${BREW_BOOTSTRAP_NOTED:-}" ]; then
+      note "dry  install Homebrew into $HOME/homebrew first"
+      BREW_BOOTSTRAP_NOTED=1
+    fi
+    note "dry  $HOME/homebrew/bin/brew install $p"
+    return 0
+  fi
+  # Telling the caller to go and run install_brew is not help when nothing else can work
+  # here: no root means the package manager is out, and this is the only route left.
+  if [ ! -x "$HOME/homebrew/bin/brew" ]; then
+    note "no Homebrew here and no root: bootstrapping one into $HOME/homebrew first"
+    brew_user_prefix || return 1
+  fi
+  # `brew shellenv` is the documented way in, but it is meant to be eval'd and this repo
+  # bans eval. brew derives its prefix from its own location, so putting it on PATH is all
+  # it actually needs from that output.
+  PATH="$HOME/homebrew/bin:$PATH"; export PATH
+  run brew install "$p"
 }
 
 sub_install_brew() {
-  have brew && { ok "already installed: $(brew --version | head -1)"; return 0; }
+  # "Already installed" must still check the PATH wiring, because the two go out of sync in
+  # exactly the case that matters: a prefix installed by something else, with nothing on
+  # PATH for automation to find. Returning early here left a Mac with tmux, htop and wget in
+  # its Cellar and none of them runnable over ssh.
+  have brew && { ok "already installed: $(brew --version | head -1)"; brew_path_wiring; return 0; }
+  # A user-prefix install is not on PATH in a non-interactive shell, so `have brew` misses
+  # it. Without this check a re-run reinstalls Homebrew on a machine that already has it,
+  # which is exactly what an unattended second pass does.
+  if [ -x "$HOME/homebrew/bin/brew" ]; then
+    ok "already installed: $("$HOME/homebrew/bin/brew" --version | head -1), in $HOME/homebrew"
+    brew_path_wiring
+    return 0
+  fi
   if [ "${DRY:-0}" = 1 ]; then
     note "dry  fetch the Homebrew installer and run it, then put it on PATH for login shells"
     return 0
@@ -184,14 +315,28 @@ sub_install_brew() {
     # guess from here about passwords.
     /bin/bash "$tmp"
   else
-    bad "no terminal here, and Homebrew needs one to ask for your password"
-    note "run it at a prompt on this machine, then re-run this: see the Homebrew home page"
-    note "or drive this over ssh -t, which gives the session a terminal"
-    return 1
+    # No terminal and no passwordless sudo. The official installer cannot proceed: it wants
+    # /opt/homebrew, which needs root. Homebrew does support another prefix, though, and a
+    # user-writable one needs no privilege at all, so an unattended setup is not stuck.
+    #
+    # The trade-off, stated because it is the whole reason this is not the default.
+    # Homebrew calls a non-default prefix a Tier 3 configuration: relocatable bottles are
+    # still poured there, but the rest build from source. Measured on a Mac mini installing
+    # tmux: tmux, htop and jemalloc poured in seconds, while openssl@3, libevent, ncurses
+    # and utf8proc compiled. So it needs the Xcode command line tools, and it is minutes
+    # rather than seconds. Still beats a host sitting toolless until a human is free.
+    note "no terminal and no passwordless sudo, so /opt/homebrew is out of reach"
+    note "installing into $HOME/homebrew instead, which needs no privilege"
+    note "that prefix is Tier 3: bottles pour when relocatable, the rest build from source"
+    brew_user_prefix || return 1
   fi
-  # The old version wrote this to one hardcoded home directory, which worked for exactly
-  # one machine. Find the prefix, write to the profile of whoever is running.
-  for prefix in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew; do
+  brew_path_wiring
+}
+
+# Put whichever prefix exists onto PATH for future shells. Separate from the install so a
+# machine that already has brew still gets wired up.
+brew_path_wiring() {
+  for prefix in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew "$HOME/homebrew"; do
     [ -x "$prefix/bin/brew" ] || continue
     profile="$HOME/.profile"; [ "$(os)" = macos ] && profile="$HOME/.zprofile"
     if grep -qs 'brew shellenv' "$profile"; then
@@ -202,8 +347,34 @@ sub_install_brew() {
       printf '\neval "$(%s/bin/brew shellenv)"\n' "$prefix" >>"$profile"
       ok "added to $profile"
     fi
+    # The login profile is not the file `ssh host cmd` reads, and that is how anything
+    # driving this machine will run brew. On zsh a non-interactive non-login shell reads
+    # ~/.zshenv and nothing else, so a PATH that only exists in ~/.zprofile makes every
+    # installed tool report as absent to automation while working fine by hand.
+    if [ "$(os)" = macos ] && [ "${DRY:-0}" != 1 ]; then
+      if grep -qs 'brew shellenv' "$HOME/.zshenv"; then
+        note "already on PATH for non-interactive shells"
+      else
+        printf '\neval "$(%s/bin/brew shellenv)"\n' "$prefix" >>"$HOME/.zshenv"
+        ok "added to $HOME/.zshenv, so ssh <host> <cmd> sees it too"
+      fi
+    fi
     break
   done
+}
+
+# Homebrew in a user-writable prefix. Its own installer only targets the privileged
+# prefixes, so this is the documented clone-anywhere path rather than anything exotic.
+brew_user_prefix() {
+  dest="$HOME/homebrew"
+  if [ -x "$dest/bin/brew" ]; then ok "already installed: $dest"; return 0; fi
+  if [ "${DRY:-0}" = 1 ]; then note "dry  git clone Homebrew into $dest, then brew update"; return 0; fi
+  have git || die "git is needed to install Homebrew into a user prefix"
+  run git clone --depth=1 https://github.com/Homebrew/brew "$dest" || return 1
+  PATH="$dest/bin:$PATH"; export PATH
+  # --force because a shallow clone is not what brew expects to update from.
+  "$dest/bin/brew" update --force --quiet >/dev/null 2>&1 || note "brew update complained, continuing"
+  ok "installed: $("$dest/bin/brew" --version | head -1) in $dest"
 }
 
 sub_install_docker() {
