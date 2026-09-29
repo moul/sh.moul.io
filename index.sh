@@ -280,12 +280,17 @@ user_brew() {
 }
 
 sub_install_brew() {
-  have brew && { ok "already installed: $(brew --version | head -1)"; return 0; }
+  # "Already installed" must still check the PATH wiring, because the two go out of sync in
+  # exactly the case that matters: a prefix installed by something else, with nothing on
+  # PATH for automation to find. Returning early here left a Mac with tmux, htop and wget in
+  # its Cellar and none of them runnable over ssh.
+  have brew && { ok "already installed: $(brew --version | head -1)"; brew_path_wiring; return 0; }
   # A user-prefix install is not on PATH in a non-interactive shell, so `have brew` misses
   # it. Without this check a re-run reinstalls Homebrew on a machine that already has it,
   # which is exactly what an unattended second pass does.
   if [ -x "$HOME/homebrew/bin/brew" ]; then
     ok "already installed: $("$HOME/homebrew/bin/brew" --version | head -1), in $HOME/homebrew"
+    brew_path_wiring
     return 0
   fi
   if [ "${DRY:-0}" = 1 ]; then
@@ -325,8 +330,12 @@ sub_install_brew() {
     note "that prefix is Tier 3: bottles pour when relocatable, the rest build from source"
     brew_user_prefix || return 1
   fi
-  # The old version wrote this to one hardcoded home directory, which worked for exactly
-  # one machine. Find the prefix, write to the profile of whoever is running.
+  brew_path_wiring
+}
+
+# Put whichever prefix exists onto PATH for future shells. Separate from the install so a
+# machine that already has brew still gets wired up.
+brew_path_wiring() {
   for prefix in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew "$HOME/homebrew"; do
     [ -x "$prefix/bin/brew" ] || continue
     profile="$HOME/.profile"; [ "$(os)" = macos ] && profile="$HOME/.zprofile"
