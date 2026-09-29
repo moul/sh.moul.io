@@ -301,12 +301,15 @@ sub_install_brew() {
     # /opt/homebrew, which needs root. Homebrew does support another prefix, though, and a
     # user-writable one needs no privilege at all, so an unattended setup is not stuck.
     #
-    # The trade-off, stated because it is the whole reason this is not the default: a
-    # non-default prefix gets no bottles, so formulae build from source. Minutes instead of
-    # seconds, and it needs the compiler toolchain present. Still beats waiting for a human.
+    # The trade-off, stated because it is the whole reason this is not the default.
+    # Homebrew calls a non-default prefix a Tier 3 configuration: relocatable bottles are
+    # still poured there, but the rest build from source. Measured on a Mac mini installing
+    # tmux: tmux, htop and jemalloc poured in seconds, while openssl@3, libevent, ncurses
+    # and utf8proc compiled. So it needs the Xcode command line tools, and it is minutes
+    # rather than seconds. Still beats a host sitting toolless until a human is free.
     note "no terminal and no passwordless sudo, so /opt/homebrew is out of reach"
     note "installing into $HOME/homebrew instead, which needs no privilege"
-    note "formulae will BUILD FROM SOURCE there: no bottles outside the default prefix"
+    note "that prefix is Tier 3: bottles pour when relocatable, the rest build from source"
     brew_user_prefix || return 1
   fi
   # The old version wrote this to one hardcoded home directory, which worked for exactly
