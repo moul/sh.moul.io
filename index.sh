@@ -253,17 +253,30 @@ deb_unpack() {
 
 user_brew() {
   p="$1"
-  if [ -x "$HOME/homebrew/bin/brew" ]; then
-    if [ "${DRY:-0}" = 1 ]; then note "dry  $HOME/homebrew/bin/brew install $p"; return 0; fi
-    # `brew shellenv` is the documented way in, but it is meant to be eval'd and this repo
-    # bans eval. brew derives its prefix from its own location, so putting it on PATH is
-    # all it actually needs from that output.
-    PATH="$HOME/homebrew/bin:$PATH"; export PATH
-    run brew install "$p"
-    return $?
+  # DRY has to describe the whole plan, including the bootstrap, and must never fail. The
+  # first version checked for the prefix before checking DRY, so `DRY=1 install_tools` on a
+  # Mac without a user prefix reported four failures and exited 1. A preview that fails is
+  # worse than no preview: it is indistinguishable from the real thing being broken.
+  if [ "${DRY:-0}" = 1 ]; then
+    # Once per run, not once per package: the bootstrap happens a single time.
+    if [ ! -x "$HOME/homebrew/bin/brew" ] && [ -z "${BREW_BOOTSTRAP_NOTED:-}" ]; then
+      note "dry  install Homebrew into $HOME/homebrew first"
+      BREW_BOOTSTRAP_NOTED=1
+    fi
+    note "dry  $HOME/homebrew/bin/brew install $p"
+    return 0
   fi
-  bad "$p: no user-prefix Homebrew yet. Run install_brew first"
-  return 1
+  # Telling the caller to go and run install_brew is not help when nothing else can work
+  # here: no root means the package manager is out, and this is the only route left.
+  if [ ! -x "$HOME/homebrew/bin/brew" ]; then
+    note "no Homebrew here and no root: bootstrapping one into $HOME/homebrew first"
+    brew_user_prefix || return 1
+  fi
+  # `brew shellenv` is the documented way in, but it is meant to be eval'd and this repo
+  # bans eval. brew derives its prefix from its own location, so putting it on PATH is all
+  # it actually needs from that output.
+  PATH="$HOME/homebrew/bin:$PATH"; export PATH
+  run brew install "$p"
 }
 
 sub_install_brew() {
