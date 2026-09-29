@@ -178,7 +178,10 @@ sub_install_brew() {
   # Hand it the real terminal. The session has one even when this script's stdin does not.
   if (: </dev/tty) 2>/dev/null; then
     /bin/bash "$tmp" </dev/tty
-  elif sudo -n true 2>/dev/null; then
+  elif [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then
+    # Root reaches here in containers that have no sudo binary at all. Let Homebrew speak
+    # for itself: it refuses to run as root, and its own reason is more accurate than a
+    # guess from here about passwords.
     /bin/bash "$tmp"
   else
     bad "no terminal here, and Homebrew needs one to ask for your password"
